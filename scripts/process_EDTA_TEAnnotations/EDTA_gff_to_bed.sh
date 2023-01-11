@@ -1,6 +1,11 @@
 #!/bin/bash
 
-raw_dir=/home/brandvai/mmunasin/NAM_EDTA/raw_gff_files
+#### EDTA_gff_to_bed.sh
+#### Manisha Munasinghe - Last Updated - 01/11/23
+#### Take Raw panEDTA TE Annotations
+#### and convert from GFF3 Format To Bed Format
+
+raw_dir=/path/to/NAM_EDTA/raw_panEDTA_gff_annotations
 
 for entry in "$raw_dir"/*.gff3
 do
