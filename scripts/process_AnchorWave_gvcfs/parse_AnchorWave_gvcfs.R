@@ -41,29 +41,7 @@ library(tidyr)
 #[17] glue_1.6.2       purrr_0.3.4      compiler_4.0.4   pkgconfig_2.0.3
 #[21] tidyselect_1.1.2 tibble_3.1.6
 
-# Parse Out Extra Text Around Strings
-remove_extra_txt <- function(col_string) {
-	rel_text <- unlist(str_split(col_string,pattern='='))[2]
-	return(rel_text)
-}
-
-# Classify Variants As Either SNPs, Small InDels <= 50 bp, or SV > 50 bp
-determine_variant_type <- function(row.df) {
-	ID_size <- (as.numeric(row.df[3]) - as.numeric(row.df[2]))+1
-	ASM_size <- (as.numeric(row.df[6]) - as.numeric(row.df[5])) +1
-
-	size_dif <- abs(ID_size - ASM_size)
-
-	if (size_dif == 0 ) {
-		return('SNP')
-	}
-	if (size_dif > 0 & size_dif <= 50) {
-		return('InDel')
-	} 
-	if (size_dif > 50) {
-		return('structural_variant')
-	}
-}
+source('/path/to/function_scripts/AnchorWave_process_functions.R')
 
 # Pass in AnchorWave GVCF Pairwise Alignment Between B73 and a NAM line
 # Remove Headers from AnchorWave GVCF prior to this step
@@ -84,22 +62,13 @@ nonvariant <- nonvariant %>%
 tidyr::separate(col=INFO,into=c('ASM_CHR','ASM_END','ASM_Start','ASM_Strand', 'END'),sep=';')
 
 # Split the attribute string
-nonvariant$ASM_CHR <- unlist(lapply(nonvariant$ASM_CHR,remove_extra_txt))
-nonvariant$ASM_END <- unlist(lapplynonvariant$ASM_END,remove_extra_txt))
-nonvariant$ASM_Start <- unlist(lapply(nonvariant$ASM_Start,remove_extra_txt))
-nonvariant$ASM_Strand <- unlist(lapply(nonvariant$ASM_Strand,remove_extra_txt))
-nonvariant$END <- unlist(lapply(nonvariant$END,remove_extra_txt))
+nonvariant <- update_ASM_columns(nonvariant,tag='nv')
 
 nv_regions <- data.frame(nonvariant$CHROM,nonvariant$POS,nonvariant$END,nonvariant$ASM_CHR,nonvariant$ASM_Start,nonvariant$ASM_END)
 
-col1 <- paste(ID_lineage,'Chr',sep='_')
-col2 <- paste(ID_lineage,'StartPos',sep='_')
-col3 <- paste(ID_lineage,'EndPos',sep='_')
-col4 <- paste(ASM_lineage,'Chr',sep='_')
-col5 <- paste(ASM_lineage,'StartPos',sep='_')
-col6 <- paste(ASM_lineage,'EndPos',sep='_')
+df_col_names <- make_column_names(ID_lineage,ASM_lineage)
 
-colnames(nv_regions) <- c(col1,col2,col3,col4,col5,col6)
+colnames(nv_regions) <- df_col_names
 nv_regions$Type <- 'nonvariant_region'
 
 # All the remaining regions are variant regions classified as either SNP, InDel, or SV
@@ -107,18 +76,14 @@ variant <- gvcf[!grep("END",gvcf$INFO),]
 variant$ref_bp_size <- unlist(lapply(variant$REF,nchar))
 variant$REF_END <- (variant$POS + variant$ref_bp_size)-1
 
-
 variant <- variant %>% 
 tidyr::separate(col=INFO,into=c('ASM_CHR','ASM_END','ASM_Start','ASM_Strand'),sep=';')
 
-variant$ASM_CHR <- unlist(lapply(variant$ASM_CHR,remove_extra_txt))
-variant$ASM_END <- unlist(lapply(variant$ASM_END,remove_extra_txt))
-variant$ASM_Start <- unlist(lapply(variant$ASM_Start,remove_extra_txt))
-variant$ASM_Strand <- unlist(lapply(variant$ASM_Strand,remove_extra_txt))
+variant <- update_ASM_columns(variant,tag='v')
 
 v_regions <- data.frame(variant$CHROM,variant$POS,variant$REF_END, variant$ASM_CHR,variant$ASM_Start, variant$ASM_END)
 
-colnames(v_regions) <- c(col1,col2,col3,col4,col5,col6)
+colnames(v_regions) <- df_col_names
 
 # Run for Oh43
 # v_regions <- v_regions %>% filter(B73_StartPos!=234530060)
