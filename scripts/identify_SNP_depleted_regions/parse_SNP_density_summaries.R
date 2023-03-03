@@ -42,9 +42,8 @@ library(tidyr)
 
 source('/path/to/function_scripts/SNP_density_functions.R')
 
-#NAM_level_orders <- c("B73","B97","Ky21","M162W","Ms71","Oh43","Oh7B","M37W","Mo18W","Tx303","HP301","P39","Il14H","CML52","CML69","CML103","CML228","CML247","CML277","CML322","CML333","Ki3","Ki11","NC350","NC358","Tzi8")
+NAM_level_orders <- c("B73","B97","Ky21","M162W","Ms71","Oh43","Oh7B","M37W","Mo18W","Tx303","HP301","P39","Il14H","CML52","CML69","CML103","CML228","CML247","CML277","CML322","CML333","Ki3","Ki11","NC350","NC358","Tzi8")
 chr_level_orders <- c("chr1","chr2","chr3",'chr4','chr5','chr6','chr7','chr8','chr9','chr10')
-#classification_level_orders <- c("shared",'ambiguous','polymorphic')
 
 #Load + Format Rolling Window SNP Density Across Lineages
 SNP_density_dir <- '/home/brandvai/mmunasin/TE_Intron/store_data/SNP_density_summaries'
