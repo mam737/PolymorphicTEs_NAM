@@ -50,41 +50,7 @@ library(bedtoolsr)
 #[21] vctrs_0.4.1      glue_1.6.2       stringi_1.7.6    compiler_4.0.4
 #[25] pillar_1.7.0     generics_0.1.2   scales_1.2.0     pkgconfig_2.0.3
 
-# For a given feature, extract which AW Blocks it overlaps
-pull_AW_blocks <- function(id_name_val,bed_df,comp) {
-	if (comp=='id') {
-		AW_Blocks <- bed_df %>% subset(id_name==id_name_val) %>% 
-		pull(AW_name) %>% unique()
-	}
-	if (comp=='asm') {
-		AW_Blocks <- bed_df %>% subset(asm_name==id_name_val) %>% 
-		pull(AW_name) %>% unique()
-	}
-	AW_Blocks <- paste(AW_Blocks,collapse=',')
-	return(AW_Blocks)
-}
-
-# There are technically 5 possibly groupings
-# alignable, structural variation in B73, structural variation in NAM, unalignable, or missing data
-# ensure column for each of these groupings for consistency across all files
-check_missing_cols <- function(final_df,ID_struct_tag,ASM_struct_tag) {	
-	if (!('alignable_region' %in% colnames(final_df))) {
-		final_df$alignable_region <- 0
-	}
-	if (!(ID_struct_tag %in% colnames(final_df))) {
-		final_df[[ID_struct_tag]] <- 0
-	}
-	if (!(ASM_struct_tag %in% colnames(final_df))) {
-		final_df[[ASM_struct_tag]] <- 0
-	}
-	if(!('unalignable' %in% colnames(final_df))) {
-		final_df$unalignable <- 0
-	}
-	if(!('Missing_Data' %in% colnames(final_df))) {
-		final_df$Missing_Data <- 0
-	}
-	return(final_df)
-}
+source('/path/to/function_scripts/classify_feature_functions.R')
 
 # Pass in directory containing summarised AnchorWave blocks for
 # a pairwise comparison between B73 and another NAM genome
