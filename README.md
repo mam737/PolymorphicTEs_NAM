@@ -1,7 +1,7 @@
 # Combined analysis of transposable elements and structural variation in maize genomes reveals genome contraction outpaces expansion
 
 This repository contains scripts used to identify polymorphic TEs between B73 and
-the remaining 25 maize inbred founder lines for the maize Nested Association Mapping (NAM) population. It also contains all several relevant datasets generated and used in this analysis that are available here for public use. 
+the remaining 25 maize inbred founder lines for the maize Nested Association Mapping (NAM) population. All relevant datasets can be found at the Data Repository for U of M at xxxxxx. 
 
 Subfolders within the scripts folder correlate to specific steps of the analysis.
 
