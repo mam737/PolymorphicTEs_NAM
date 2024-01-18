@@ -1,9 +1,9 @@
-.libPaths('/home/brandvai/mmunasin/Rlibs4')
+.libPaths('/path/to/mmunasin/Rlibs4')
 
+library(tidyr)
 library(dplyr)
 library(stringr)
 library(data.table)
-library(tidyr)
 library(ggplot2)
 library(ggpubr)
 library(Rmisc)
@@ -11,270 +11,7 @@ library(forcats)
 library(ggforce)
 library(MetBrewer)
 
-load_filtered_TE_data <- function(TE_dir) {
-	filtered_TE_anno <- list()
-
-	for (dir_index in 2:length(list.dirs(TE_dir))) {
-		subdir <- list.dirs(TE_dir)[dir_index]
-		lineage <- unlist(str_split(subdir,pattern='/'))[8]
-		lineage_TEs <- do.call('rbind',lapply(list.files(subdir,full.names=T),fread))
-		filtered_TE_anno[[dir_index]] <- lineage_TEs
-	}
-	filtered_TE_anno <- filtered_TE_anno[-1]
-	filtered_TE_anno <- do.call('rbind',filtered_TE_anno)
-	filtered_TE_anno <- filtered_TE_anno %>% subset(raw_family!='DTC_ZM00081_consensus') %>% 
-	dplyr::mutate(size=end-start)
-	return(filtered_TE_anno)
-}
-
-filtered_TE_summary <- function(filtered_TE) {
-	TE_summary <- filtered_TE %>% group_by(lineage) %>% 
-	dplyr::summarise(TotalTE=n(),TotalMb=sum(size)/1000000)
-
-	TE_summary <- filtered_TE %>% group_by(lineage,method) %>% 
-	dplyr::summarise(TotalTE=n(),TotalMb=sum(size)/1000000) %>%
-	pivot_wider(names_from=method,values_from=c(TotalTE,TotalMb),names_vary='slowest') %>%
-	left_join(x=TE_summary,by='lineage')
-
-	TE_summary <- filtered_TE %>% group_by(lineage,class) %>% 
-	dplyr::summarise(TotalTE=n(),TotalMb=sum(size)/1000000) %>%
-	pivot_wider(names_from=class,values_from=c(TotalTE,TotalMb),names_vary='slowest') %>%
-	left_join(x=TE_summary,by='lineage')
-
-	TE_summary <- filtered_TE %>% group_by(lineage,condense_superfamily) %>% 
-	dplyr::summarise(TotalTE=n(),TotalMb=sum(size)/1000000) %>%
-	pivot_wider(names_from=condense_superfamily,values_from=c(TotalTE,TotalMb),names_vary='slowest') %>%
-	left_join(x=TE_summary,by='lineage')
-	return(TE_summary)
-} 
-
-load_AW_data <- function(AW_dir) {
-	sub_dirs <- list.dirs(AW_dir,recursive=F)
-	all_AW_data <- list()
-	for (dir_index in 1:length(sub_dirs)) {
-		dir <- sub_dirs[dir_index]
-		ID_lineage <- unlist(str_split(unlist(str_split(dir,pattern='/'))[8],pattern='_'))[1]
-		ASM_lineage <- unlist(str_split(unlist(str_split(dir,pattern='/'))[8],pattern='_'))[2]
-
-		AW_files <- list.files(dir,full.names=T)
-		AW_data <- lapply(AW_files,fread)
-		full_AW_data <- do.call('rbind',AW_data)
-		full_AW_data$Lineage_Comp <- ASM_lineage
-		colnames(full_AW_data) <- c('ID_chr','ID_start','ID_end','ASM_chr','ASM_start','ASM_end','Block_Type','AW_BlockID','Lineage_Comp')
-
-		all_AW_data[[dir_index]] <- full_AW_data	
-	}
-	all_AW_data <- do.call('rbind',all_AW_data)
-	all_AW_data <- all_AW_data %>% 
-	mutate(ID_BlockSize = (ID_end-ID_start)+1,ASM_BlockSize=(ASM_end-ASM_start)+1 )
-
-	all_AW_data <- all_AW_data %>% mutate(reduced_type = 
-		case_when(Block_Type %in% c("Missing_Data","unalignable") ~ 'unalignable',
-			Block_Type == "structural_insertion_inB73" ~ 'structural_insertion_inB73',
-			Block_Type == 'alignable_region' ~ 'alignable_region',
-			TRUE ~ 'structural_insertion_inNAM'
-		))
-	return(all_AW_data)
-}
-
-process_TE_calls <- function(TE_dir){
-	n_calls <- lapply(list.files(TE_dir,full.names=T),fread)
-	n_file_order <- unlist(lapply(list.files(TE_dir,full.names=T),function(x) unlist(str_split(x,pattern='_'))[7]))
-	n_calls <- mapply(cbind,n_calls,'ASM_Comp'=n_file_order,SIMPLIFY=F)
-	n_colnames <- c("TE_name","chr","start","end","method","type","class","raw_superfamily","upd_superfamily","condense_superfamily","raw_family","alignable_region","structural_insertion_inID","structural_insertion_inASM","unalignable","Missing_Data","AW_Blocks","classification","ASM_Comp")
-	n_calls  <- lapply(n_calls,setNames,n_colnames)
-
-	all_n_calls <- do.call('rbind',n_calls)
-
-	all_n_calls$ASM_Comp <- factor(all_n_calls$ASM_Comp,levels=NAM_level_orders)
-	all_n_calls$chr <- factor(all_n_calls$chr,levels=chr_level_orders)
-	all_n_calls$classification <- factor(all_n_calls$classification,levels=classification_level_orders)
-	all_n_calls <- all_n_calls %>% subset(raw_family!='DTC_ZM00081_consensus')
-
-	return(all_n_calls)
-}
-
-summarise_TE_Tag <- function(n_calls,tag_type) {
-	summarised_calls <- n_calls %>%
-	group_by(ASM_Comp,classification) %>% 
-	dplyr::summarise(TE_ClassificationTotal=n()) %>% 
-	dplyr::mutate(tag=tag_type)
-}
-
-process_gene_calls <- function(gene_dir,tag,type) {
-	gene_calls <- lapply(list.files(gene_dir,full.names=T),fread)
-	gene_file_order <- unlist(lapply(list.files(gene_dir,full.names=T),function(x) unlist(str_split(x,pattern='_'))[7]))
-
-	id_exon_colnames <- c("id_name",'id_chr','id_start','id_end','exon_num','alignable_region','structural_insertion_inID','structural_insertion_inASM','unalignable','Missing_Data','AW_Blocks','classification')
-	id_gene_colnames <- c("id_name",'id_chr','id_start','id_end','alignable_region','structural_insertion_inID','structural_insertion_inASM','unalignable','Missing_Data','AW_Blocks','classification')
-
-	asm_exon_colnames <- c("asm_name",'asm_chr','asm_start','asm_end','exon_num','alignable_region','structural_insertion_inID','structural_insertion_inASM','unalignable','Missing_Data','AW_Blocks','classification')
-	asm_gene_colnames <- c("asm_name",'asm_chr','asm_start','asm_end','alignable_region','structural_insertion_inID','structural_insertion_inASM','unalignable','Missing_Data','AW_Blocks','classification')
- 
-	if (tag=='id' & type =='exon') {
-		gene_calls  <- lapply(gene_calls,setNames,id_exon_colnames)
-	} else if (tag=='id' & type =='gene') {
-		gene_calls  <- lapply(gene_calls,setNames,id_gene_colnames)
-	} else if (tag=='asm' & type =='exon') {
-		gene_calls  <- lapply(gene_calls,setNames,asm_exon_colnames)
-	} else {
-		gene_calls  <- lapply(gene_calls,setNames,asm_gene_colnames)
-	}
-
-	gene_calls <- mapply(cbind,gene_calls,'ASM_Comp'=gene_file_order,SIMPLIFY=F)
-	all_gene_calls <- do.call('rbind',gene_calls)
-
-	all_gene_calls$ASM_Comp <- factor(all_gene_calls$ASM_Comp,levels=NAM_level_orders)
-
-	if (tag=='id') {
-		all_gene_calls$id_chr <- factor(all_gene_calls$id_chr,levels=chr_level_orders)
-		all_gene_calls$classification <- factor(all_gene_calls$classification,levels=classification_level_orders)
-		all_gene_calls <- all_gene_calls %>% separate(id_name,into=c('gene_name','transcript'),sep='_')
-	} else {
-		all_gene_calls$asm_chr <- factor(all_gene_calls$asm_chr,levels=chr_level_orders)
-			all_gene_calls$classification <- factor(all_gene_calls$classification,levels=classification_level_orders)
-		all_gene_calls <- all_gene_calls %>% separate(asm_name,into=c('gene_name','transcript'),sep='_')
-	}
-	
-	return(all_gene_calls)
-}
-
-obtain_gene_synteny <- function(dir_name) {
-	syntenic_gene_files <- list.files(dir_name,full.names=T)
-	syntenic_genes_data <- lapply(syntenic_gene_files,fread)
-	syntenic_file_order <- unlist(lapply(syntenic_gene_files, function(x) unlist(str_split(unlist(str_split(x,pattern='/'))[8],pattern='-'))[2]))
-
-	syntenic_genes_data <- mapply(cbind,syntenic_genes_data,'NAM_Line'=syntenic_file_order,SIMPLIFY=F)
-	syntenic_colnames <- c("Sorghum_gene_name","NAM_gene_name",'NAM_Line')
-	syntenic_genes_data <- lapply(syntenic_genes_data,setNames,syntenic_colnames)
-
-	syntenic_genes_all <- do.call('rbind',syntenic_genes_data)
-	return(syntenic_genes_all)
-}
-
-add_synteny_column <- function(gene.df,syntenic_genes.df) {
-	gene.df <- gene.df %>% 
-	dplyr::mutate(syntenic_gene = case_when(
-		gene_name %in% syntenic_genes.df$NAM_gene_name ~ 'TRUE',
-		TRUE ~ 'FALSE'
-		))
-	return(gene.df)
-}
-
-obtain_synteny_summary <- function(gene.df,synteny_tag,type_tag) {
-	if (synteny_tag==TRUE & type_tag=='id') {
-		summary_gene.df <- gene.df %>%
-		subset(syntenic_gene==TRUE) %>% 
-		group_by(ASM_Comp,classification) %>%
-		dplyr::summarise(gene_ClassificationTotal = n()) %>% 
-		dplyr::mutate(tag='B73')
-	} else if (synteny_tag==TRUE & type_tag=='asm') {
-		summary_gene.df <- gene.df %>%
-		subset(syntenic_gene==TRUE) %>% 
-		group_by(ASM_Comp,classification) %>%
-		dplyr::summarise(gene_ClassificationTotal = n()) %>% 
-		dplyr::mutate(tag='NAM')		
-	} else if (synteny_tag==FALSE & type_tag=='id') {
-		summary_gene.df <- gene.df %>%
-		subset(syntenic_gene==FALSE) %>% 
-		group_by(ASM_Comp,classification) %>%
-		dplyr::summarise(gene_ClassificationTotal = n()) %>% 
-		dplyr::mutate(tag='B73')
-	} else {
-		summary_gene.df <- gene.df %>%
-		subset(syntenic_gene==FALSE) %>% 
-		group_by(ASM_Comp,classification) %>%
-		dplyr::summarise(gene_ClassificationTotal = n()) %>% 
-		dplyr::mutate(tag='NAM')		
-	}
-	return(summary_gene.df)
-}
-
-shared_frequency <- function(call_dist.df) {
-	call_dist.df <- call_dist.df %>% dplyr::mutate(degree_shared = 
-	case_when(n==25 ~ 'Core',
-		n %in% c(23,24) ~ 'Near Core',
-		n %in% seq(1,22) ~ 'Variable',
-		TRUE ~ 'Private'
-		))
-	call_dist.df$n <- as.factor(call_dist.df$n)
-	call_dist.df$degree_shared <- factor(call_dist.df$degree_shared,levels=c('Private','Variable','Near Core','Core'))
-	return(call_dist.df)
-}
-
-obtain_polymorphic_percent <- function(call.df,tag.string) {
-	poly_percent <- call.df %>%
-	group_by(ASM_Comp,classification,condense_superfamily,method) %>%
-	dplyr::summarise(n=n()) %>% ungroup() %>% 
-	group_by(ASM_Comp,condense_superfamily,method) %>% 
-	dplyr::mutate(percent_total=n/sum(n)*100) %>% dplyr::mutate(tag=tag.string) %>% 
-	subset(classification=='polymorphic') %>% 
-	summarySE(measurevar="percent_total", groupvars=c("condense_superfamily","method")) %>%
-	dplyr::mutate(tag=tag.string)
-	return(poly_percent)
-}
-
-obtain_large_polymorphic_percent <- function(call.df,tag.string) {
-	largefam_poly_percent <- call.df %>%
-	group_by(ASM_Comp,raw_family) %>%
-	dplyr::mutate(fam_size=n()) %>% subset(fam_size >= 20) %>% 
-	ungroup() %>% group_by(ASM_Comp,raw_family,classification,fam_size)%>%
-	dplyr::summarise(class_count=n()) %>% ungroup() %>% 
-	group_by(ASM_Comp,raw_family) %>%
-	dplyr::mutate(percent_total=class_count/sum(class_count)*100) %>% 
-	subset(classification=='polymorphic') %>% mutate(tag=tag.string)
-	return(largefam_poly_percent)
-}
-
-summarise_AW_CA <- function(CA.df,tag.string) {
-	summary_AW_CA <- CA.df %>%
-	pivot_longer(cols=c('n','Mb'),names_to='Type',values_to='Amount') %>%
-	tidyr::separate(Category,into=c("tag",'number'),sep='_') %>%
-	dplyr::mutate(Category=paste(tag,number,sep=' ')) %>%
-	dplyr::mutate(Category=factor(Category,levels=c('Category 1','Category 2','Category 3','Category 4','Category 5')))%>%
-	dplyr::mutate(Type=case_when(
-		Type=='n'~'Number',
-		TRUE ~ 'Cumulative Mb'))%>%
-	dplyr::mutate(Type=factor(Type,levels=c('Number','Cumulative Mb')))%>% 
-	select(Category,Type,Amount) %>% 
-	dplyr::mutate(tag=tag.string)
-}
-
-fam_supfam_relate <- function(B73_TE,NAM_TE) {
-	fam_supfam_relation <- rbind(B73_TE,NAM_TE) %>% 
-	group_by(raw_family, condense_superfamily) %>% dplyr::summarise(n=n()) %>%
-	ungroup() %>% group_by(raw_family) %>% arrange(desc(n)) %>% 
-	filter(row_number()==1) %>% select(1,2)
-	colnames(fam_supfam_relation)[1] <- 'TE_family'
-	return(fam_supfam_relation)
-}
-
-TE_SV_relationship <- function(type_SNPD_TE_overlaps,type_SNPD_SV_categories) {
-	polymorphic_TEs_in_SNPD <- type_SNPD_TE_overlaps %>%
-	subset(TE_Classification=='polymorphic')
-	colnames(polymorphic_TEs_in_SNPD)[9] <- 'TE_LC'
-
-	polymorphic_TEs_in_SNPD.bed <- polymorphic_TEs_in_SNPD %>%
-	select(6,7,8,9,10,11,12,13,14,15,16,5)
-	colnames(polymorphic_TEs_in_SNPD.bed)[1:3] <- c('chr','start','end')
-
-	SNPD_insertion_categories.bed <- type_SNPD_SV_categories %>%
-	select(6,7,8,9,10,12,15,5)
-	colnames(SNPD_insertion_categories.bed)[1:3] <- c('chr','start','end')
-
-	type_polymorphicTE_InsertionCategory_SNPD <- list()
-
-	for (i in 1:length(unique(polymorphic_TEs_in_SNPD.bed$TE_LC))) {
-		LC <- unique(polymorphic_TEs_in_SNPD.bed$TE_LC)[i]
-		LC_polymorphic_TEs <- polymorphic_TEs_in_SNPD.bed %>% subset(TE_LC==LC)
-		LC_insertion_categories <- SNPD_insertion_categories.bed %>% subset(AW_Comp==LC)
-		polymorphicTE_insertion_overlap <- bedtoolsr::bt.intersect(LC_polymorphic_TEs,LC_insertion_categories,wo=T)
-		colnames(polymorphicTE_insertion_overlap) <- c('TE_chr','TE_start','TE_end','TE_LC','TE_name','TE_class','TE_superfamily','TE_family','TE_method','TE_classification','TE_size','TE_SNPD_ID','AW_chr','AW_start','AW_end','AW_BlockID','AW_LC','AW_Size','AW_Category','AW_SNPD_ID','bp_overlap')
-		type_polymorphicTE_InsertionCategory_SNPD[[i]] <- polymorphicTE_insertion_overlap
-	}
-	polymorphicTE_InsertionCategory_SNPD <- do.call('rbind',type_polymorphicTE_InsertionCategory_SNPD)
-	return(polymorphicTE_InsertionCategory_SNPD)
-}
+source("~/path/to/figures/generate_figure_functions.R")
 
 ################################################################################################
 ################################################################################################
@@ -298,12 +35,15 @@ classification_level_orders <- c("shared",'polymorphic','ambiguous')
 ################################################################################################
 ################################################################################################
 
-filtered_TE_anno_dir <- '/home/brandvai/mmunasin/TE_Intron/store_data/filtered_TE_anno'
+filtered_TE_anno_dir <- '/path/to/filtered_TE_anno'
 filtered_TE_anno <- load_filtered_TE_data(filtered_TE_anno_dir)
 
 TE_summary <- filtered_TE_summary(filtered_TE_anno)
 
-fwrite(TE_summary,file='/home/brandvai/mmunasin/TE_Intron/store_data/summary_data_files/SupplementalTables/TableS1.csv')
+fwrite(TE_summary,file='/path/to/summary_data_files/SupplementalTables/TableS1.csv')
+
+B73_TEs <- filtered_TE_anno %>% filter(lineage=='B73') %>%
+select(chr,start,end,name,class,condense_superfamily,raw_family,method)
 
 ################################################################################################
 ################################################################################################
@@ -311,7 +51,7 @@ fwrite(TE_summary,file='/home/brandvai/mmunasin/TE_Intron/store_data/summary_dat
 ################################################################################################
 ################################################################################################
 
-head_AW_dir <- '/home/brandvai/mmunasin/TE_Intron/store_data/summarised_AnchorWave_Regions'
+head_AW_dir <- '/path/to/summarised_AnchorWave_Regions'
 all_AW_data <- load_AW_data(head_AW_dir)
 
 summarised_all_AW_data <- all_AW_data %>% 
@@ -335,7 +75,7 @@ labs(x='',y='Mb in Genome') +
 guides(fill = guide_legend(title = "AW Block Assignment")) + 
 ggtitle("")
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig1b.pdf'
+ggsave('/path/to/figures/fig1b.pdf'
 	,plot=fig_1b_1 ,width=1.5,height=2.0)
 
 average_all_AW_data <- summarised_all_AW_data %>% 
@@ -366,7 +106,7 @@ ggtitle("NAM Total AnchorWave Classification By Type")
 
 figs1 <- ggarrange(figs1_1,figs1_2,ncol=1,nrow=2,common.legend=T,legend='bottom')
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/figS1.pdf'
+ggsave('/path/to/figures/figS1.pdf'
 	,plot=figs1,width=8,height=6)
 
 ################################################################################################
@@ -375,8 +115,8 @@ ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig
 ################################################################################################
 ################################################################################################
 
-B73_TE_n_dir <- '/home/brandvai/mmunasin/TE_Intron/store_data/polymorphic_TE_calls/B73/TE_n'
-NAM_TE_n_dir <- '/home/brandvai/mmunasin/TE_Intron/store_data/polymorphic_TE_calls/NAM/TE_n'
+B73_TE_n_dir <- '/path/to/store_data/polymorphic_TE_calls/B73/'
+NAM_TE_n_dir <- '/path/to/store_data/polymorphic_TE_calls/NAM/'
 
 all_B73_TE_n_calls <- process_TE_calls(B73_TE_n_dir)
 all_NAM_TE_n_calls <- process_TE_calls(NAM_TE_n_dir)
@@ -402,17 +142,17 @@ labs(x='',y='Mean Proportion') +
 theme_bw()+ 
 guides(fill = guide_legend(title = "Classification"))
 
-B73_exon_dir <- '/home/brandvai/mmunasin/TE_Intron/store_data/polymorphic_gene_calls/B73/exon_calls'
-B73_full_dir <- '/home/brandvai/mmunasin/TE_Intron/store_data/polymorphic_gene_calls/B73/full_calls'
-NAM_exon_dir <- '/home/brandvai/mmunasin/TE_Intron/store_data/polymorphic_gene_calls/NAM/exon_calls'
-NAM_full_dir <- '/home/brandvai/mmunasin/TE_Intron/store_data/polymorphic_gene_calls/NAM/full_calls'
+B73_exon_dir <- '/path/to/polymorphic_gene_calls/B73/exon_calls'
+B73_full_dir <- '/path/to/polymorphic_gene_calls/B73/full_calls'
+NAM_exon_dir <- '/path/to/polymorphic_gene_calls/NAM/exon_calls'
+NAM_full_dir <- '/path/to/polymorphic_gene_calls/NAM/full_calls'
 
 all_B73_exon_calls <- process_gene_calls(B73_exon_dir,tag='id',type='exon')
 all_B73_full_calls <- process_gene_calls(B73_full_dir,tag='id',type='gene')
 all_NAM_exon_calls <- process_gene_calls(NAM_exon_dir,tag='asm',type='exon')
 all_NAM_full_calls <- process_gene_calls(NAM_full_dir,tag='asm',type='gene')
 
-syntenic_gene_list_dir <- '/home/springer/shared/ns-genome/Zmays_NAM_genomes/NAM_syntenic_genes'
+syntenic_gene_list_dir <- '/path/to/NAM_syntenic_genes'
 syntenic_genes_all <- obtain_gene_synteny(syntenic_gene_list_dir)
 
 all_B73_exon_calls <- add_synteny_column(all_B73_exon_calls,syntenic_genes_all)
@@ -457,7 +197,7 @@ guides(fill = guide_legend(title = "Classification"))
 
 fig1cde <- ggarrange(fig1c_r1c1,fig1c_r2c3,fig1c_r2c2,ncol=3,nrow=1,common.legend=T,legend='none')
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig1cde.pdf'
+ggsave('/path/to/figures/fig1cde.pdf'
 	,plot=fig1cde,width=4,height=2.0,bg='#ffffff')
 
 ################################################################################################
@@ -576,7 +316,7 @@ ggtitle("NAM Full-Length Gene Classification Totals")
 
 figs2 <- ggarrange(figs2_r1c1,NULL,figs2_r1c2,figs2_r2c1,NULL,figs2_r2c2,figs2_r3c1,NULL,figs2_r3c2,nrow=3,ncol=3,widths=c(1,0.15,1),common.legend=T,legend='bottom')
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/figS2.pdf'
+ggsave('/path/to/figures/figS2.pdf'
 	,plot=figs2,width=10,height=6)
 
 ################################################################################################
@@ -600,7 +340,7 @@ theme_bw()+
 theme(legend.position = "bottom",legend.key.size = unit(0.5, 'cm'),legend.text = element_text(size=7),axis.text.x = element_text(angle = 90,hjust=1.10,vjust=0.95))+
 guides(fill=guide_legend(title=''))
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig2A.tif'
+ggsave('/path/to/figures/fig2A.tif'
 	,plot=fig2A,width=5,height=2,device='tiff',dpi=700,bg='#ffffff')
 
 all_B73_full_calls$syntenic_gene <- factor(all_B73_full_calls$syntenic_gene,levels=c('TRUE','FALSE'))
@@ -639,10 +379,10 @@ theme_bw()+
 theme(legend.position = "none")+
 guides(fill=guide_legend(title=''))
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig2C.tif'
+ggsave('/path/to/figures/fig2C.tif'
 	,plot=fig2C,width=4,height=2,device='tiff',dpi=700,bg='#ffffff')
 
-structuralTE_identity <- fread('/home/brandvai/mmunasin/TE_Intron/store_data/summary_data_files/structurally_annotated_LTRs_identity.tsv')
+structuralTE_identity <- fread('/path/to/summary_data_files/structurally_annotated_LTRs_identity.tsv')
 B73_structuralTE_identity <- structuralTE_identity %>% subset(lineage=='B73')
 B73_identity_score <- B73_structuralTE_identity %>% select(name,ltr_identity)
 colnames(B73_identity_score)[1] <- 'TE_name'
@@ -668,9 +408,9 @@ theme_bw()+
 theme(legend.position = "bottom")+
 guides(fill=guide_legend(title='',reverse=TRUE))
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig2D_alt2.png'
+ggsave('/path/to/figures/fig2D_alt2.png'
 	,plot=fig2D_alt2,width=4,height=2,bg='#ffffff')
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig2D_alt2.tif'
+ggsave('/path/to/figures/fig2D_alt2.tif'
 	,plot=fig2D_alt2,width=4,height=2,device='tiff',dpi=700,bg='#ffffff')
 
 ################################################################################################
@@ -696,7 +436,7 @@ labs(x='Superfamily',y='% Polymorphic')+
 theme_bw()+
 guides(fill = guide_legend(title = "TE Set"))
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig3A.png'
+ggsave('/path/to/figures/fig3A.png'
 	,plot=fig3A,width=6.0,height=1.5,bg='#ffffff')
 
 B73_largefam_polymorphic_percent <- obtain_large_polymorphic_percent(all_B73_TE_n_calls,tag.string='B73')
@@ -710,7 +450,7 @@ ggplot(aes(x=range_perc_total)) + geom_histogram(binwidth=5,fill='#e8b697' ,colo
 labs(x='% Polymorphic Range',y='Number of B73 TE Families')+
 theme_bw()
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig3B_alt1.png'
+ggsave('/path/to/figures/fig3B_alt1.png'
 	,plot=fig3B_alt1,width=4.0,height=3.5,bg='#ffffff')
 
 fig3B_alt2 <- B73_largefam_polymorphic_percent %>% group_by(raw_family,fam_size) %>%
@@ -719,8 +459,62 @@ ggplot(aes(x=fam_size,y=range_perc_total)) + geom_point(size=0.5,color='#CB6A2D'
 labs(x='TE Family Size',y='Range of Polymorphic %')+
 theme_bw()
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig3B_alt2.png'
+ggsave('/path/to/figures/fig3B_alt2.png'
 	,plot=fig3B_alt2,width=4.0,height=3.5,bg='#ffffff')
+
+largefam_range <- B73_largefam_polymorphic_percent %>% group_by(raw_family,fam_size) %>%
+dplyr::summarise(range_perc_total=max(percent_total)-min(percent_total))
+
+B73_structuralLTR_age <- B73_structuralTE_identity %>% 
+select(name,ltr_identity,condense_superfamily,raw_family) %>%
+group_by(raw_family)
+
+fig3X_ltrage <- left_join(B73_structuralLTR_age,largefam_range,by=c("raw_family")) %>%
+filter(!(is.na(fam_size))) %>% group_by(raw_family,fam_size,range_perc_total) %>%
+dplyr::summarise(avg_struct_age=mean(ltr_identity))%>% 
+dplyr::mutate(avg_ltr_age=case_when(
+	avg_struct_age==1 ~ 'Very Young',
+	avg_struct_age >= 0.95 & avg_struct_age < 1 ~ 'Young',
+	avg_struct_age >= 0.9 & avg_struct_age < 0.95 ~ 'Moderate',
+	avg_struct_age >= 0.8 & avg_struct_age < 0.9 ~ 'Old')) %>%
+dplyr::mutate(avg_ltr_age=factor(avg_ltr_age,levels=c('Very Young','Young','Moderate','Old'))) %>%
+ggplot(aes(x=fam_size,y=range_perc_total,color=avg_ltr_age)) + 
+geom_point(size=0.5)+
+labs(x='TE Family Size',y='Range of Polymorphic %')+
+scale_color_manual(values=rev(met.brewer("Hokusai2",n=4)))+
+theme_bw()
+
+ggsave('/path/to/figures/fig3X_ltrage.png'
+	,plot=fig3X_ltrage,width=4.0,height=3.5,bg='#ffffff')
+
+fig3X2_ltrage <- left_join(B73_structuralLTR_age,largefam_range,by=c("raw_family")) %>%
+filter(!(is.na(fam_size))) %>% group_by(raw_family,fam_size,range_perc_total) %>%
+dplyr::summarise(avg_struct_age=mean(ltr_identity))%>% 
+dplyr::mutate(avg_ltr_age=case_when(
+	avg_struct_age==1 ~ 'Very Young',
+	avg_struct_age >= 0.95 & avg_struct_age < 1 ~ 'Young',
+	avg_struct_age >= 0.9 & avg_struct_age < 0.95 ~ 'Moderate',
+	avg_struct_age >= 0.8 & avg_struct_age < 0.9 ~ 'Old')) %>%
+dplyr::mutate(avg_ltr_age=factor(avg_ltr_age,levels=c('Very Young','Young','Moderate','Old'))) %>%
+ggplot(aes(x=fam_size,y=range_perc_total,color=avg_ltr_age)) + 
+geom_point(size=0.5)+facet_wrap(~avg_ltr_age)+
+labs(x='TE Family Size',y='Range of Polymorphic %')+
+scale_color_manual(values=rev(met.brewer("Hokusai2",n=4)))+
+theme_bw()
+
+ggsave('/path/to/figures/fig3X2_ltrage.png'
+	,plot=fig3X2_ltrage,width=5.0,height=5,bg='#ffffff')
+
+left_join(B73_structuralLTR_age,largefam_range,by=c("raw_family")) %>%
+filter(!(is.na(fam_size))) %>% group_by(raw_family,fam_size,range_perc_total) %>%
+dplyr::summarise(avg_struct_age=mean(ltr_identity))%>% 
+dplyr::mutate(avg_ltr_age=case_when(
+	avg_struct_age==1 ~ 'Very Young',
+	avg_struct_age >= 0.95 & avg_struct_age < 1 ~ 'Young',
+	avg_struct_age >= 0.9 & avg_struct_age < 0.95 ~ 'Moderate',
+	avg_struct_age >= 0.8 & avg_struct_age < 0.9 ~ 'Old')) %>%
+dplyr::mutate(avg_ltr_age=factor(avg_ltr_age,levels=c('Very Young','Young','Moderate','Old'))) %>%
+group_by(avg_ltr_age) %>% dplyr::summarise(min=min(range_perc_total),max=max(range_perc_total),n=n())
 
 ################################################################################################
 ################################################################################################
@@ -728,13 +522,13 @@ ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig
 ################################################################################################
 ################################################################################################
 
-AWBlocks_CategoryAssignment <- fread("/home/brandvai/mmunasin/TE_Intron/store_data/summary_data_files/all_AWBlocks_CategoryAssignment.tsv")
+AWBlocks_CategoryAssignment <- fread("/path/to/summary_data_files/all_AWBlocks_CategoryAssignment.tsv")
 
 B73_AWBlocks_CA <- AWBlocks_CategoryAssignment %>% subset(Block_Type=='structural_insertion_inB73')
 NAM_AWBlocks_CA <- AWBlocks_CategoryAssignment %>% subset(!(Block_Type %in% c('structural_insertion_inB73','alignable_region','unalignable','Missing_Data')))
 
 summary_B73_AWBlocks_CA <- B73_AWBlocks_CA %>% group_by(Category) %>%
-dplyr::summarise(n=n(),Mb=sum(ID_BlockSize)/1000000)
+dplyr::summarise(n=n(),Mb=sum(ID_BlockSize)/1000000)	
 
 summary_NAM_AWBlocks_CA <- NAM_AWBlocks_CA %>% group_by(Category) %>%
 dplyr::summarise(n=n(),Mb=sum(ASM_BlockSize)/1000000)
@@ -751,7 +545,7 @@ scale_fill_manual(values=met.brewer("Hokusai3", 5))+
 theme_bw()+
 theme(legend.position = "none")
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig4C.png'
+ggsave('/path/to/figures/fig4C.png'
 	,plot=fig_4C ,width=2,height=4,bg='#ffffff')
 
 ################################################################################################
@@ -760,44 +554,11 @@ ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig
 ################################################################################################
 ################################################################################################
 
-B73_genome_cumulMb <- summarised_all_AW_data %>% 
-subset(reduced_type != 'structural_insertion_inNAM') %>% 
-group_by(reduced_type) %>% 
-dplyr::summarise(ID_cumulMb=sum(ID_BlockTotal_Mb))
-B73_total_cumulMb <- sum(B73_genome_cumulMb$ID_cumulMb)
-B73_insertion_cumulMb <- B73_genome_cumulMb$ID_cumulMb[2]
+# Read in data for AW Blocks in SNP Depleted Regions
+B73_SNPD_AW_overlaps <- fread('/path/to/summary_data_files/SNP_Depleted_Summaries/B73_SNP_Depleted_AW_Overlaps.csv')
+NAM_SNPD_AW_overlaps <- fread('/path/to/summary_data_files/SNP_Depleted_Summaries/NAM_SNP_Depleted_AW_Overlaps.csv')
 
-NAM_genome_cumulMb <- summarised_all_AW_data %>% 
-subset(reduced_type != 'structural_insertion_inB73') %>% 
-group_by(reduced_type) %>% 
-dplyr::summarise(ASM_cumulMb=sum(ASM_BlockTotal_Mb))
-NAM_total_cumulMb <- sum(NAM_genome_cumulMb$ASM_cumulMb)
-NAM_insertion_cumulMb <- NAM_genome_cumulMb$ASM_cumulMb[2]
-
-total_cumulMb <- B73_total_cumulMb+NAM_total_cumulMb
-insertion_cumulMb <- B73_insertion_cumulMb+NAM_insertion_cumulMb
-
-cumulMb <- data.frame(group='Genome-Wide',perc_inserted=(insertion_cumulMb/total_cumulMb)*100,Mb_inserted=insertion_cumulMb)
- 
-B73_SNPD_AW_overlaps <- fread('/home/brandvai/mmunasin/TE_Intron/store_data/summary_data_files/SNP_Depleted_Summaries/B73_SNP_Depleted_AW_Overlaps.csv')
-NAM_SNPD_AW_overlaps <- fread('/home/brandvai/mmunasin/TE_Intron/store_data/summary_data_files/SNP_Depleted_Summaries/NAM_SNP_Depleted_AW_Overlaps.csv')
-
-B73_SNPD_cumulMb <- B73_SNPD_AW_overlaps %>% 
-group_by(AW_type) %>% 
-dplyr::summarise(ID_cumulMb=sum(bp_overlap)/1000000)
-B73_SNPD_total_cumulMb <- sum(B73_SNPD_cumulMb$ID_cumulMb)
-B73_SNPD_insertion_cumulMb <- B73_SNPD_cumulMb$ID_cumulMb[2]
-
-NAM_SNPD_cumulMb <- NAM_SNPD_AW_overlaps %>% 
-group_by(AW_type) %>% 
-dplyr::summarise(ASM_cumulMb=sum(bp_overlap)/1000000)
-NAM_SNPD_total_cumulMb <- sum(NAM_SNPD_cumulMb$ASM_cumulMb)
-NAM_SNPD_insertion_cumulMb <- NAM_SNPD_cumulMb$ASM_cumulMb[2]
-
-SNPD_cumulMb <- B73_SNPD_total_cumulMb+NAM_SNPD_total_cumulMb
-SNPD_insertion_cumulMb <-B73_SNPD_insertion_cumulMb+NAM_SNPD_insertion_cumulMb
-
-cumulMb <- rbind(cumulMb, data.frame(group='SNP Depleted',perc_inserted=(SNPD_insertion_cumulMb/SNPD_cumulMb)*100,Mb_inserted=SNPD_insertion_cumulMb))
+cumulMb <- obtain_cumulMB(summarised_all_AW_data,B73_SNPD_AW_overlaps,NAM_SNPD_AW_overlaps)
 
 Fig5A <- ggplot(cumulMb,aes(x=group,y=perc_inserted)) +
 geom_bar(aes(fill = group), position = "dodge", stat="identity",width=0.4)+
@@ -806,51 +567,10 @@ labs(x='',y='% Cumulative Mb of Inserted Sequence')+ylim(c(0,40))+
 theme_bw()+
 theme(legend.position = "none")
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig5A.png'
+ggsave('/path/to/figures/fig5A.png'
 	,plot=Fig5A ,width=1.5,height=1.5,bg='#ffffff')
 
-B73_TE_cumulMb <- all_B73_TE_n_calls %>% 
-dplyr::mutate(size=end-start) %>% 
-group_by(classification) %>% 
-dplyr::summarise(TE_cumulMB=sum(size)/1000000)
-
-B73_totalTE_cumulMb <- sum(B73_TE_cumulMb$TE_cumulMB)
-B73_polymorphicTE_cumulMb <- B73_TE_cumulMb$TE_cumulMB[2]
-
-NAM_TE_cumulMb <- all_NAM_TE_n_calls %>% 
-dplyr::mutate(size=end-start) %>% 
-group_by(classification) %>% 
-dplyr::summarise(TE_cumulMB=sum(size)/1000000)
-
-NAM_totalTE_cumulMb <- sum(NAM_TE_cumulMb$TE_cumulMB)
-NAM_polymorphicTE_cumulMb <- NAM_TE_cumulMb$TE_cumulMB[2]
-
-totalTE_cumulMb <- B73_totalTE_cumulMb+NAM_totalTE_cumulMb
-polymorphicTE_cumulMb <- B73_polymorphicTE_cumulMb+NAM_polymorphicTE_cumulMb
-
-TE_cumulMb <- data.frame(group='Genome-Wide',perc_polymorphic=(polymorphicTE_cumulMb/totalTE_cumulMb)*100,Mb_polymorphic=polymorphicTE_cumulMb)
-
-B73_SNPD_TE_overlaps <- fread('/home/brandvai/mmunasin/TE_Intron/store_data/summary_data_files/SNP_Depleted_Summaries/B73_SNP_Depleted_TE_Overlaps.csv')
-NAM_SNPD_TE_overlaps <- fread('/home/brandvai/mmunasin/TE_Intron/store_data/summary_data_files/SNP_Depleted_Summaries/NAM_SNP_Depleted_TE_Overlaps.csv')
-
-B73_SNPD_TE_cumulMb <- B73_SNPD_TE_overlaps %>% 
-group_by(TE_Classification) %>% 
-dplyr::summarise(TE_cumulMB=sum(TE_size)/1000000)
-
-B73_SNPD_totalTE_cumulMb <- sum(B73_SNPD_TE_cumulMb$TE_cumulMB)
-B73_SNPD_polymorphicTE_cumulMb <- B73_SNPD_TE_cumulMb$TE_cumulMB[2]
-
-NAM_SNPD_TE_cumulMb <- NAM_SNPD_TE_overlaps %>% 
-group_by(TE_Classification) %>% 
-dplyr::summarise(TE_cumulMB=sum(TE_size)/1000000)
-
-NAM_SNPD_totalTE_cumulMb <- sum(NAM_SNPD_TE_cumulMb$TE_cumulMB)
-NAM_SNPD_polymorphicTE_cumulMb <- NAM_SNPD_TE_cumulMb$TE_cumulMB[2]
-
-SNPD_totalTE_cumulMb <- B73_SNPD_totalTE_cumulMb+NAM_SNPD_totalTE_cumulMb
-SNPD_polymorphicTE_cumulMb <- B73_SNPD_polymorphicTE_cumulMb+NAM_SNPD_polymorphicTE_cumulMb
-
-TE_cumulMb <- rbind(TE_cumulMb, data.frame(group='SNP Depleted',perc_polymorphic=(SNPD_polymorphicTE_cumulMb/SNPD_totalTE_cumulMb)*100, Mb_polymorphic=SNPD_polymorphicTE_cumulMb))
+TE_cumulMb <- obtain_TE_cumulMb(all_B73_TE_n_calls,all_NAM_TE_n_calls)
 
 Fig5B <- ggplot(TE_cumulMb,aes(x=group,y=perc_polymorphic)) +
 geom_bar(aes(fill = group), position = "dodge", stat="identity",width=0.4)+
@@ -859,44 +579,13 @@ labs(x='',y='% Cumulative Mb of Polymorphic TE Sequence')+ylim(c(0,40))+
 theme_bw()+
 theme(legend.position = "none")
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig5B.png'
+ggsave('/path/to/figures/fig5B.png'
 	,plot=Fig5B ,width=1.5,height=1.5,bg='#ffffff')
 
-combined_summary_AW_CA <- summary_AW_CA %>% group_by(Category,Type) %>%
-dplyr::summarise(Amount=sum(Amount)) %>%
-dplyr::mutate(tag='Genome Wide')
+B73_SNPD_SV_categories <- SNPD_SV_categories(B73_SNPD_AW_overlaps,B73_AWBlocks_CA,tag='B73')
+NAM_SNPD_SV_categories <- SNPD_SV_categories(NAM_SNPD_AW_overlaps,NAM_AWBlocks_CA,tag='NAM')
 
-insertions_B73_SNPD_AW_overlaps <- B73_SNPD_AW_overlaps %>% subset(AW_type=='structural_insertion_inB73')
-
-reduced_B73_AWBlocks_CA <- B73_AWBlocks_CA %>% select(AW_BlockID,Lineage_Comp,Category)
-colnames(reduced_B73_AWBlocks_CA) <- c('AW_ID','AW_Comp','Category')
-
-B73_SNPD_insertion_categories <- left_join(insertions_B73_SNPD_AW_overlaps, reduced_B73_AWBlocks_CA,by=c('AW_ID','AW_Comp'))
-#fwrite(B73_SNPD_insertion_categories,'/home/brandvai/mmunasin/TE_Intron/store_data/summary_data_files/SNP_Depleted_Summaries/B73_SNP_Depleted_Insertion_Categories.csv')
-
-SNPD_summary_B73_AWBlocks_CA <- B73_SNPD_insertion_categories %>% group_by(Category) %>%
-dplyr::summarise(n=n(),Mb=sum(AW_size)/1000000)
-
-summarise_SNPD_B73_insertion_CA <- summarise_AW_CA(SNPD_summary_B73_AWBlocks_CA,'B73') 
-
-insertions_NAM_SNPD_AW_overlaps <- NAM_SNPD_AW_overlaps %>% subset(AW_type=='structural_insertion_inNAM')
-
-reduced_NAM_AWBlocks_CA <- NAM_AWBlocks_CA %>% select(AW_BlockID,Lineage_Comp,Category)
-colnames(reduced_NAM_AWBlocks_CA) <- c('AW_ID','AW_Comp','Category')
-
-NAM_SNPD_insertion_categories <- left_join(insertions_NAM_SNPD_AW_overlaps, reduced_NAM_AWBlocks_CA,by=c('AW_ID','AW_Comp'))
-#fwrite(NAM_SNPD_insertion_categories,'/home/brandvai/mmunasin/TE_Intron/store_data/summary_data_files/SNP_Depleted_Summaries/NAM_SNP_Depleted_Insertion_Categories.csv')
-
-SNPD_summary_NAM_AWBlocks_CA <- NAM_SNPD_insertion_categories %>% group_by(Category) %>%
-dplyr::summarise(n=n(),Mb=sum(AW_size)/1000000)
-summarise_SNPD_NAM_insertion_CA <- summarise_AW_CA(SNPD_summary_NAM_AWBlocks_CA,'NAM') 
-
-SNPD_summary_AW_CA <- rbind(summarise_SNPD_B73_insertion_CA,summarise_SNPD_NAM_insertion_CA)
-
-combined_SNPD_summary_AW_CA <- SNPD_summary_AW_CA %>% group_by(Category,Type) %>%
-dplyr::summarise(Amount=sum(Amount)) %>% dplyr::mutate(tag='SNP Depleted')
-
-combined_AW_CA <- rbind(combined_summary_AW_CA,combined_SNPD_summary_AW_CA)
+combined_AW_CA <- AW_by_CA(summary_AW_CA,B73_SNPD_SV_categories,NAM_SNPD_SV_categories)
 
 fig_5C <- ggplot(combined_AW_CA,aes(x=tag,y=Amount,fill=Category)) +
 geom_bar(position='fill',stat='identity',width=0.3)+
@@ -906,7 +595,7 @@ scale_fill_manual(values=met.brewer("Hokusai3", 5))+
 theme_bw()+
 theme(legend.position = "none")
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig5C.png'
+ggsave('/path/to/figures/fig5C.png'
 	,plot=fig_5C ,width=2.5,height=2,bg='#ffffff')
 
 fig_5D_updated <- combined_AW_CA %>% 
@@ -924,8 +613,24 @@ scale_fill_manual(values=met.brewer("Hokusai3", 5)[2:5])+
 theme_bw()+
 theme(legend.position='none')
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig5D_updated.png'
+ggsave('/path/to/figures/fig5D_updated.png'
 	,plot=fig_5D_updated ,width=2,height=2,bg='#ffffff')
+
+B73_SNPD_size_dist <- B73_SNPD_SV_categories %>% 
+filter(Category !='Category_1') %>% 
+dplyr::mutate(SV_type=case_when(
+	Category=='Category_3' ~ 'Insertion',
+	TRUE ~ 'Deletion')) %>%
+select(AW_chr,AW_start,AW_end,AW_ID,AW_Comp,AW_size,Category,SV_type)
+
+NAM_SNPD_size_dist <- NAM_SNPD_SV_categories %>% 
+filter(Category !='Category_1') %>% 
+dplyr::mutate(SV_type=case_when(
+	Category=='Category_3' ~ 'Insertion',
+	TRUE ~ 'Deletion')) %>%
+select(AW_chr,AW_start,AW_end,AW_ID,AW_Comp,AW_size,Category,SV_type)
+
+size_dist <- rbind(B73_SNPD_size_dist,NAM_SNPD_size_dist)
 
 ################################################################################################
 ################################################################################################
@@ -933,8 +638,7 @@ ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig
 ################################################################################################
 ################################################################################################
 
-
-SNP_dir <- '/home/brandvai/mmunasin/TE_Intron/store_data/SNP_density_summaries'
+SNP_dir <- '/path/to/SNP_density_summaries'
 SNP_data <- lapply(list.files(SNP_dir,full.names=T),fread)
 
 file_order <- unlist(lapply(list.files(SNP_dir,full.names=T),function(x) unlist(str_split(x,pattern='_'))[6]))
@@ -943,7 +647,7 @@ SNP_data <- mapply(cbind,SNP_data,'ASM_Comp'=lineage_names,SIMPLIFY=F)
 SNP_data <- do.call('rbind',SNP_data)
 B73_SNP_data <- SNP_data %>% subset(ASM_Comp=='B97')
 
-SNPD_regions <- fread('/home/brandvai/mmunasin/TE_Intron/store_data/summary_data_files/SupplementalTables/TableS2.csv')
+SNPD_regions <- fread('/path/to/summary_data_files/SupplementalTables/TableS2.csv')
 B73_SNPD_regions <- SNPD_regions %>% subset(NAM_Comparison=='B97')
 B73_SNPD_highlights <- B73_SNPD_regions %>% select(B73_Start_Pos,B73_End_Pos,Chr) %>% dplyr::summarise(start=B73_Start_Pos/1000000,end=B73_End_Pos/1000000,chr=Chr) %>% dplyr::mutate(group=1:n())
 
@@ -952,14 +656,14 @@ geom_line()+ ylim(c(0,0.025)) + geom_rect(data=B73_SNPD_highlights,inherit.aes=F
 facet_wrap(~chr,nrow=5,ncol=2,scales='free_x')+
 labs(x='Sliding Window Mb Start Position',y='Normalized SNP Count',title='Normalized SNP Rate for B73 vs B97')
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/figS3_final.pdf'
+ggsave('/path/to/figures/figS3_final.pdf'
 	,plot=FigS3 ,width=7,height=10,bg='#ffffff')
 
 SNPD_size_dist <- data.frame(SNPD_size=c(SNPD_regions$B73_Size_Mb,SNPD_regions$NAM_Size_Mb))
 FigS4 <- ggplot(SNPD_size_dist,aes(x=SNPD_size)) +
 geom_histogram(binwidth=0.5,fill='lightblue',color='darkblue')+labs(x='SNP Depleted Region Size (Mb)',y='Count')
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/figS4_final.pdf'
+ggsave('/path/to/figures/figS4_final.pdf'
 	,plot=FigS4 ,width=3,height=2,bg='#ffffff')
 ################################################################################################
 ################################################################################################
@@ -986,8 +690,7 @@ TableS3 <- Cat3_polymorphicTE_SNPD %>%
 select(tag,TE_LC,TE_chr,TE_start,TE_end,TE_name,TE_class,TE_superfamily,TE_family,TE_method,TE_size,AW_chr,AW_start,AW_end,AW_BlockID,AW_Size,AW_SNPD_ID)
 colnames(TableS3)[1:2] <- c("TE_Geno","AW_Comparison_Geno")
 colnames(TableS3)[17] <- c('SNPD_BlockID')
-fwrite(TableS3,file='/home/brandvai/mmunasin/TE_Intron/store_data/summary_data_files/SupplementalTables/TableS3.csv')
-
+fwrite(TableS3,file='/path/to/summary_data_files/SupplementalTables/TableS3.csv')
 
 Cat3_Family_SNPD <- Cat3_polymorphicTE_SNPD %>% 
 group_by(TE_family) %>% dplyr::summarise(n=n()) %>% 
@@ -1008,5 +711,89 @@ labs(x='TE Family',y='')+
 theme_classic()+
 theme(legend.position="none",axis.text.x=element_blank())
 
-ggsave('/home/brandvai/mmunasin/TE_Intron/store_data/Rplots/08.31.22_figures/fig6A.png'
+ggsave('/path/to/fig6A.png'
 	,plot=Fig6A,width=6,height=1.5,bg='#ffffff')
+
+
+#########
+B73_MultiTE_SNPD <- B73_SNPD_insertion_categories %>% filter(Category=='Category_4') %>%
+select(AW_chr,AW_start,AW_end,AW_ID,AW_Comp,SNPD_ID,SNPD_chr,SNPD_start,SNPD_end)
+
+NAM_MultiTE_SNPD <- NAM_SNPD_insertion_categories %>% filter(Category=='Category_4')
+
+B73_MultiTE_SNPD_overlaps <- bedtoolsr::bt.intersect(B73_MultiTE_SNPD,B73_TEs,wo=T)
+colnames(B73_MultiTE_SNPD_overlaps) <- c('AW_chr','AW_start','AW_end','AW_ID','AW_Comp','SNPD_ID','SNPD_chr','SNPD_start','SNPD_end','TE_chr','TE_start','TE_end','TE_name','TE_class','TE_superfamily','TE_family','TE_Method','bp_overlap')
+
+B73_MultiTE_SNPD_overlaps <- B73_MultiTE_SNPD_overlaps %>%
+dplyr::mutate(left_overlap = case_when(
+	TE_start < AW_start & TE_end > AW_start ~ TRUE,
+	TRUE ~ FALSE)) %>%
+dplyr::mutate(right_overlap=case_when(
+	TE_start < AW_end & TE_end > AW_end ~ TRUE,
+	TRUE ~ FALSE)) %>% group_by(AW_ID,AW_Comp) %>%
+dplyr::mutate(edge_case=case_when(
+	TRUE %in% left_overlap & TRUE %in% right_overlap ~ 'both_edges',
+	TRUE %in% left_overlap & !(TRUE %in% right_overlap) ~ 'left_edges',
+	!(TRUE %in% left_overlap) & TRUE %in% right_overlap ~ 'right_edges',
+	TRUE ~ 'no_edge'
+	))
+
+B73_MultiTE_SNPD_edge_matches <- B73_MultiTE_SNPD_overlaps %>% filter(edge_case=='both_edges') %>%
+filter(left_overlap==TRUE | right_overlap==TRUE) %>% group_by(AW_ID,AW_Comp) %>%
+dplyr::mutate(n=n()) %>% filter(n==2) %>% 
+dplyr::mutate(edge_fammatch=case_when(
+	length(unique(TE_family))==1 ~ TRUE,
+	TRUE ~ FALSE)) %>% 
+dplyr::mutate(edge_supermatch=case_when(
+	length(unique(TE_superfamily))==1 ~ TRUE,
+	TRUE ~ FALSE))
+
+
+left_bounds <- B73_MultiTE_SNPD %>% 
+dplyr::mutate(l_lbound = AW_start - 50, l_rbound = AW_start + 50, r_lbound = AW_end - 50, r_rbound = AW_end + 50) %>%
+select(AW_chr,l_lbound,l_rbound,AW_ID,AW_start,AW_end,AW_Comp, SNPD_ID)
+
+B73_MultiTE_SNPD_lbound_overlaps <- bedtoolsr::bt.intersect(left_bounds,B73_TEs,wo=T)
+colnames(B73_MultiTE_SNPD_lbound_overlaps) <- c('AW_chr','l_bound','r_bound','AW_ID','AW_start','AW_end','AW_Comp','SNPD_ID','TE_chr','TE_start','TE_end','TE_name','TE_class','TE_superfamily','TE_family','TE_Method', 'TE_identity','bp_overlap')
+
+lbound_test <- B73_MultiTE_SNPD_lbound_overlaps %>% 
+group_by(AW_ID,AW_Comp) %>% dplyr::mutate(n=n()) %>%
+dplyr::mutate(fl_edge_overlap=case_when(
+	n==1 ~ TRUE,
+	length(unique(TE_family))==1 ~ TRUE,
+	TRUE ~ FALSE)) #%>%
+#ungroup() %>% group_by(AW_ID,AW_Comp,fl_edge_overlap) %>%
+#select(AW_ID,AW_Comp,fl_edge_overlap)%>%
+#distinct(AW_ID,AW_Comp,fl_edge_overlap,.keep_all=T)
+
+right_bounds <- B73_MultiTE_SNPD %>% 
+dplyr::mutate(l_lbound = AW_start - 50, l_rbound = AW_start + 50, r_lbound = AW_end - 50, r_rbound = AW_end + 50) %>%
+select(AW_chr,r_lbound,r_rbound,AW_ID,AW_start,AW_end,AW_Comp, SNPD_ID)
+
+B73_MultiTE_SNPD_rbound_overlaps <- bedtoolsr::bt.intersect(right_bounds,B73_TEs,wo=T)
+colnames(B73_MultiTE_SNPD_rbound_overlaps) <- c('AW_chr','l_bound','r_bound','AW_ID','AW_start','AW_end','AW_Comp','SNPD_ID','TE_chr','TE_start','TE_end','TE_name','TE_class','TE_superfamily','TE_family','TE_Method', 'TE_identity','bp_overlap')
+
+rbound_test <- B73_MultiTE_SNPD_rbound_overlaps %>% 
+group_by(AW_ID,AW_Comp) %>% dplyr::mutate(n=n()) %>%
+dplyr::mutate(fl_edge_overlap=case_when(
+	n==1 ~ TRUE,
+	length(unique(TE_family))==1 ~ TRUE,
+	TRUE ~ FALSE)) #%>%
+#ungroup() %>% group_by(AW_ID,AW_Comp,fl_edge_overlap) %>%
+#select(AW_ID,AW_Comp,fl_edge_overlap)%>%
+#distinct(AW_ID,AW_Comp,fl_edge_overlap,.keep_all=T)
+
+lbound_join <- lbound_test %>% filter(fl_edge_overlap==TRUE) %>% 
+select(AW_ID,AW_start,AW_end,AW_Comp,TE_family,fl_edge_overlap) %>%
+distinct()
+colnames(lbound_join)[5:6] <- c('l_TE_family','l_fl_edge_overlap')
+
+rbound_join <- rbound_test %>% filter(fl_edge_overlap==TRUE) %>% 
+select(AW_ID,AW_start,AW_end,AW_Comp,TE_family,fl_edge_overlap) %>%
+distinct()
+colnames(rbound_join)[5:6] <- c('r_TE_family','r_fl_edge_overlap')
+
+joined <- left_join(rbound_join,lbound_join,by=c('AW_ID','AW_start','AW_end','AW_Comp'))
+
+B73_MultiTE_SNPD_edge_class <- B73_MultiTE_SNPD_overlaps %>% 
+group_by(AW_ID,AW_Comp) %>% dplyr::summarise(edge_case=unique(edge_case))
