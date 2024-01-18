@@ -13,47 +13,6 @@ library(MetBrewer)
 
 #Functions
 
-obtain_filteredTE_files <- function(TE_dir) {
-	filtered_TE_anno <- list()	
-
-	for (dir_index in 2:length(list.dirs(TE_dir))) {
-		subdir <- list.dirs(TE_dir)[dir_index]
-		lineage <- unlist(str_split(subdir,pattern='/'))[8]
-		lineage_TEs <- do.call('rbind',lapply(list.files(subdir,full.names=T),fread))
-		filtered_TE_anno[[dir_index]] <- lineage_TEs
-	}
-
-	filtered_TE_anno <- filtered_TE_anno[-1]
-	filtered_TE_anno <- do.call('rbind',filtered_TE_anno)
-	filtered_TE_anno <- filtered_TE_anno %>% subset(raw_family!='DTC_ZM00081_consensus') %>% 
-	dplyr::mutate(size=end-start)
-	return(filtered_TE_anno)
-}
-
-obtain_AnchorWave_files <- function(AW_path) {
-	sub_dirs <- list.dirs(AW_path,recursive=F)
-	all_AW_data <- list()
-	for (dir_index in 1:length(sub_dirs)) {
-		dir <- sub_dirs[dir_index]
-		ID_lineage <- unlist(str_split(unlist(str_split(dir,pattern='/'))[8],pattern='_'))[1]
-		ASM_lineage <- unlist(str_split(unlist(str_split(dir,pattern='/'))[8],pattern='_'))[2]
-		AW_files <- list.files(dir,full.names=T)
-		AW_data <- lapply(AW_files,fread)
-		full_AW_data <- do.call('rbind',AW_data)
-		full_AW_data$Lineage_Comp <- ASM_lineage
-		colnames(full_AW_data) <- c('ID_chr','ID_start','ID_end','ASM_chr','ASM_start','ASM_end','Block_Type','AW_BlockID','Lineage_Comp')
-		all_AW_data[[dir_index]] <- full_AW_data
-	}
-
-	all_AW_data <- do.call('rbind',all_AW_data)
-	all_AW_data <- all_AW_data %>% mutate(ID_BlockSize = (ID_end-ID_start)+1,ASM_BlockSize=(ASM_end-ASM_start)+1 )
-	all_AW_data <- all_AW_data %>% mutate(reduced_type = 
-		case_when(Block_Type %in% c("Missing_Data","unalignable") ~ 'unalignable',
-		Block_Type == "structural_insertion_inB73" ~ 'structural_insertion_inB73',
-		Block_Type == 'alignable_region' ~ 'alignable_region',
-		TRUE ~ 'structural_insertion_inNAM'))
-	return(all_AW_data)
-}
 
 process_TE_calls <- function(TE_dir){
 	n_calls <- lapply(list.files(TE_dir,full.names=T),fread)
